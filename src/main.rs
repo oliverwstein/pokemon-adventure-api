@@ -5,6 +5,8 @@ use tracing::info;
 
 mod api;
 mod database;
+mod engine;
+mod errors;
 mod handlers;
 mod types;
 

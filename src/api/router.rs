@@ -1,9 +1,8 @@
 use lambda_runtime::Error;
-use lambda_web::LambdaError;
 use serde_json::{json, Value};
-use std::collections::HashMap;
 use tracing::{info, error};
 
+use crate::errors::ApiError;
 use crate::handlers::BattleHandler;
 use crate::types::*;
 
@@ -70,7 +69,7 @@ impl Router {
                     "headers": {
                         "Content-Type": "application/json"
                     },
-                    "body": serde_json::to_string(&ApiError::new("InternalError", &e.to_string()))
+                    "body": serde_json::to_string(&ApiError::InternalError { message: e.to_string() }.to_response())
                         .unwrap_or_else(|_| r#"{"error":"InternalError","message":"Unknown error"}"#.to_string())
                 }))
             }
@@ -139,12 +138,12 @@ impl Router {
             .and_then(|v| v.as_str())
             .map(|s| PlayerId(s.to_string()));
 
-        let request = GetBattleRequest {
+        // For now, use get_battle_state as the basic implementation
+        let battle_state_request = GetBattleStateRequest {
             battle_id,
-            player_id,
+            player_id: player_id.unwrap_or(PlayerId("system".to_string())),
         };
-
-        let response = self.battle_handler.get_battle(request).await?;
+        let response = self.battle_handler.get_battle_state(battle_state_request).await?;
         Ok(serde_json::to_value(response)?)
     }
 
@@ -154,7 +153,7 @@ impl Router {
             "headers": {
                 "Content-Type": "application/json"
             },
-            "body": serde_json::to_string(&ApiError::new("NotFound", "Endpoint not found"))
+            "body": serde_json::to_string(&ApiError::BadRequest { message: "Endpoint not found".to_string() }.to_response())
                 .unwrap_or_else(|_| r#"{"error":"NotFound","message":"Endpoint not found"}"#.to_string())
         })
     }

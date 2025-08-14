@@ -117,30 +117,102 @@ pub struct StoredBattle {
     pub last_updated: i64, // Unix timestamp
 }
 
-/// API Error types
+/// New API request/response types for clean architecture
+
+/// Request to get battle state
 #[derive(Debug, Serialize, Deserialize)]
-pub struct ApiError {
-    pub error: String,
-    pub message: String,
+pub struct GetBattleStateRequest {
+    pub battle_id: BattleId,
+    pub player_id: PlayerId,
 }
 
-impl ApiError {
-    pub fn new(error: &str, message: &str) -> Self {
-        Self {
-            error: error.to_string(),
-            message: message.to_string(),
-        }
-    }
-    
-    pub fn battle_not_found(battle_id: BattleId) -> Self {
-        Self::new("BattleNotFound", &format!("Battle {} not found", battle_id))
-    }
-    
-    pub fn invalid_player(player_id: &PlayerId) -> Self {
-        Self::new("InvalidPlayer", &format!("Player {} is not part of this battle", player_id.0))
-    }
-    
-    pub fn invalid_action(message: &str) -> Self {
-        Self::new("InvalidAction", message)
-    }
+/// Response containing battle state
+#[derive(Debug, Serialize, Deserialize)]
+pub struct GetBattleStateResponse {
+    pub battle_id: BattleId,
+    pub game_state: GameState,
+    pub turn_number: u32,
+    pub can_act: bool,
+    pub player_team: ApiTeamView,
+    pub opponent_info: ApiOpponentView,
+}
+
+/// Request to get valid actions
+#[derive(Debug, Serialize, Deserialize)]
+pub struct GetValidActionsRequest {
+    pub battle_id: BattleId,
+    pub player_id: PlayerId,
+}
+
+/// Response containing valid actions
+#[derive(Debug, Serialize, Deserialize)]
+pub struct GetValidActionsResponse {
+    pub battle_id: BattleId,
+    pub valid_actions: Vec<PlayerAction>,
+}
+
+/// Request to get team information
+#[derive(Debug, Serialize, Deserialize)]
+pub struct GetTeamInfoRequest {
+    pub battle_id: BattleId,
+    pub player_id: PlayerId,
+}
+
+/// Response containing team information
+#[derive(Debug, Serialize, Deserialize)]
+pub struct GetTeamInfoResponse {
+    pub battle_id: BattleId,
+    pub team: ApiTeamView,
+}
+
+/// API representation of team view
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ApiTeamView {
+    pub active_pokemon: Option<ApiPokemonDetail>,
+    pub team_pokemon: Vec<Option<ApiPokemonSummary>>,
+}
+
+/// Detailed Pokemon information for API
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ApiPokemonDetail {
+    pub name: String,
+    pub species: Species,
+    pub level: u8,
+    pub current_hp: u16,
+    pub max_hp: u16,
+    pub attack: u16,
+    pub defense: u16,
+    pub sp_attack: u16,
+    pub sp_defense: u16,
+    pub speed: u16,
+    pub moves: Vec<Option<ApiMoveView>>,
+    pub status: Option<String>,
+}
+
+/// Summary Pokemon information for API
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ApiPokemonSummary {
+    pub name: String,
+    pub species: Species,
+    pub level: u8,
+    pub current_hp: u16,
+    pub max_hp: u16,
+    pub is_fainted: bool,
+    pub status: Option<String>,
+}
+
+/// Move information for API
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ApiMoveView {
+    pub move_: Move,
+    pub pp: u8,
+    pub max_pp: u8,
+}
+
+/// Opponent information for API
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ApiOpponentView {
+    pub player_name: String,
+    pub active_pokemon: Option<ApiPokemonSummary>,
+    pub remaining_pokemon_count: usize,
 }

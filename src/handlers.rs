@@ -1,256 +1,214 @@
 use pokemon_adventure::{
-    battle::{
-        state::{BattleState, GameState}, 
-        engine::{collect_player_actions, resolve_turn, ready_for_turn_resolution}
-    },
-    player::BattlePlayer,
-    pokemon::PokemonInst,
-    species::Species,
+    battle::state::BattleState,
+    player::PlayerAction,
 };
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::database::Database;
+use crate::engine;
+use crate::errors::ApiError;
 use crate::types::*;
 
+/// Clean architecture: Request → Router → Database (load) → Engine (logic) → Database (save) → Response
 pub struct BattleHandler {
     db: Database,
 }
 
 impl BattleHandler {
-    pub async fn new(table_name: String) -> Result<Self, anyhow::Error> {
-        let db = Database::new(table_name).await?;
+    pub async fn new(table_name: String) -> Result<Self, ApiError> {
+        let db = Database::new(table_name).await
+            .map_err(|e| ApiError::DatabaseError { message: e.to_string() })?;
         Ok(BattleHandler { db })
     }
 
-    /// Create a new battle
-    pub async fn create_battle(&self, request: CreateBattleRequest) -> Result<CreateBattleResponse, anyhow::Error> {
+    /// Create a new battle - Clean architecture implementation
+    pub async fn create_battle(&self, request: CreateBattleRequest) -> Result<CreateBattleResponse, ApiError> {
         let battle_id = BattleId::new();
         
-        // Convert API team format to engine format
-        let player1_team = self.create_pokemon_team(&request.player1_team)?;
-        let player2_team = self.create_pokemon_team(&request.player2_team)?;
+        // Engine Logic: Pure function creates battle state
+        let battle_state = engine::create_battle(
+            battle_id.to_string(),
+            request.player1_id.clone(),
+            &request.player1_team,
+            request.player2_id.clone(),
+            &request.player2_team,
+        )?;
 
-        // Create battle players
-        let player1 = BattlePlayer::new(
-            request.player1_id.0.clone(),
-            format!("Player {}", request.player1_id.0),
-            player1_team,
-        );
-        
-        let player2 = BattlePlayer::new(
-            request.player2_id.0.clone(),
-            format!("Player {}", request.player2_id.0),
-            player2_team,
-        );
-
-        // Initialize battle state
-        let battle_state = BattleState::new(battle_id.to_string(), player1, player2);
-
-        // Store in database
-        let timestamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs() as i64;
-
+        // Database Save: Store the new battle
         let stored_battle = StoredBattle {
             battle_id,
             player1_id: request.player1_id,
             player2_id: request.player2_id,
             battle_state,
-            created_at: timestamp,
-            last_updated: timestamp,
+            created_at: current_timestamp(),
+            last_updated: current_timestamp(),
         };
 
-        self.db.create_battle(&stored_battle).await?;
+        self.db.create_battle(&stored_battle).await
+            .map_err(|e| ApiError::DatabaseError { message: e.to_string() })?;
 
+        // Response: Clean API response
         Ok(CreateBattleResponse {
             battle_id,
             status: "Battle created successfully".to_string(),
         })
     }
 
-    /// Submit a player action
-    pub async fn submit_action(&self, request: SubmitActionRequest) -> Result<SubmitActionResponse, anyhow::Error> {
-        // Retrieve battle from database
-        let mut stored_battle = self.db.get_battle(request.battle_id).await?
-            .ok_or_else(|| anyhow::anyhow!("Battle not found"))?;
+    /// Submit a player action - Clean architecture implementation
+    pub async fn submit_action(&self, request: SubmitActionRequest) -> Result<SubmitActionResponse, ApiError> {
+        // Database Load: Get current battle state
+        let mut stored_battle = self.db.get_battle(request.battle_id).await
+            .map_err(|e| ApiError::DatabaseError { message: e.to_string() })?
+            .ok_or_else(|| ApiError::battle_not_found(request.battle_id))?;
 
-        // Validate player is part of this battle
-        if request.player_id != stored_battle.player1_id && request.player_id != stored_battle.player2_id {
-            return Ok(SubmitActionResponse {
-                success: false,
-                message: "Player is not part of this battle".to_string(),
-                battle_updated: false,
-            });
-        }
+        // Engine Logic: Pure function processes the action
+        let new_battle_state = engine::submit_action(
+            stored_battle.battle_state,
+            &request.player_id,
+            request.action,
+        )?;
 
-        // Determine player index (0 or 1)
-        let player_index = if request.player_id == stored_battle.player1_id { 0 } else { 1 };
-
-        // Apply the action to the battle state
-        match self.apply_player_action(&mut stored_battle.battle_state, player_index, request.action) {
-            Ok(battle_updated) => {
-                // Save updated battle state if it changed
-                if battle_updated {
-                    stored_battle.last_updated = SystemTime::now()
-                        .duration_since(UNIX_EPOCH)
-                        .unwrap()
-                        .as_secs() as i64;
-                    
-                    self.db.update_battle(&stored_battle).await?;
-                }
-
-                Ok(SubmitActionResponse {
-                    success: true,
-                    message: "Action submitted successfully".to_string(),
-                    battle_updated,
-                })
-            }
-            Err(e) => Ok(SubmitActionResponse {
-                success: false,
-                message: e,
-                battle_updated: false,
-            })
-        }
-    }
-
-    /// Get current battle state
-    pub async fn get_battle(&self, request: GetBattleRequest) -> Result<GetBattleResponse, anyhow::Error> {
-        let stored_battle = self.db.get_battle(request.battle_id).await?
-            .ok_or_else(|| anyhow::anyhow!("Battle not found"))?;
-
-        // Extract values to avoid borrow checking issues
-        let battle_id = stored_battle.battle_id;
-        let game_state = stored_battle.battle_state.game_state;
-        let current_turn = stored_battle.battle_state.turn_number;
+        // Database Save: Update battle state
+        stored_battle.battle_state = new_battle_state;
+        stored_battle.last_updated = current_timestamp();
         
-        // Convert battle state to API response format
-        let players = vec![
-            self.create_player_summary(&stored_battle.battle_state, 0, &stored_battle.player1_id),
-            self.create_player_summary(&stored_battle.battle_state, 1, &stored_battle.player2_id),
-        ];
+        self.db.update_battle(&stored_battle).await
+            .map_err(|e| ApiError::DatabaseError { message: e.to_string() })?;
 
-        let events = self.format_recent_events(&stored_battle.battle_state);
-
-        Ok(GetBattleResponse {
-            battle_id,
-            game_state,
-            current_turn,
-            players,
-            events,
+        // Response: Success response
+        Ok(SubmitActionResponse {
+            success: true,
+            message: "Action processed successfully".to_string(),
+            battle_updated: true,
         })
     }
 
-    /// Create Pokemon team from API request format
-    fn create_pokemon_team(&self, team: &[TeamPokemon]) -> Result<Vec<PokemonInst>, anyhow::Error> {
-        let mut pokemon_team = Vec::new();
-        
-        for team_pokemon in team {
-            // Get species data using the compiled data system
-            let species_data = pokemon_adventure::pokemon::get_species_data(team_pokemon.species)
-                .ok_or_else(|| anyhow::anyhow!("Species data not found for {:?}", team_pokemon.species))?;
+    /// Get current battle state - Clean architecture implementation
+    pub async fn get_battle_state(&self, request: GetBattleStateRequest) -> Result<GetBattleStateResponse, ApiError> {
+        // Database Load: Get current battle state
+        let stored_battle = self.db.get_battle(request.battle_id).await
+            .map_err(|e| ApiError::DatabaseError { message: e.to_string() })?
+            .ok_or_else(|| ApiError::battle_not_found(request.battle_id))?;
 
-            // Create Pokemon instance
-            let pokemon = PokemonInst::new(
-                team_pokemon.species,
-                &species_data,
-                team_pokemon.level,
-                None, // Use default IVs
-                Some(team_pokemon.moves.clone()),
-            );
+        // Engine Logic: Pure function creates player-specific view
+        let battle_view = engine::get_battle_state_for_player(
+            &stored_battle.battle_state,
+            &request.player_id,
+        )?;
 
-            pokemon_team.push(pokemon);
-        }
-
-        if pokemon_team.is_empty() {
-            return Err(anyhow::anyhow!("Team cannot be empty"));
-        }
-
-        Ok(pokemon_team)
+        // Response: Convert engine view to API response
+        Ok(GetBattleStateResponse {
+            battle_id: request.battle_id,
+            game_state: battle_view.game_state,
+            turn_number: battle_view.turn_number,
+            can_act: battle_view.can_act,
+            player_team: convert_team_view(battle_view.player_team),
+            opponent_info: convert_opponent_view(battle_view.opponent_public_info),
+        })
     }
 
-    /// Apply a player action to the battle state
-    fn apply_player_action(
-        &self, 
-        battle_state: &mut BattleState, 
-        player_index: usize, 
-        action: pokemon_adventure::player::PlayerAction
-    ) -> Result<bool, String> {
-        // Check if battle is in a state where we can accept actions
-        match battle_state.game_state {
-            GameState::WaitingForActions => {
-                // Set the player's action in the action queue
-                battle_state.action_queue[player_index] = Some(action);
+    /// Get valid actions for a player - Clean architecture implementation  
+    pub async fn get_valid_actions(&self, request: GetValidActionsRequest) -> Result<GetValidActionsResponse, ApiError> {
+        // Database Load: Get current battle state
+        let stored_battle = self.db.get_battle(request.battle_id).await
+            .map_err(|e| ApiError::DatabaseError { message: e.to_string() })?
+            .ok_or_else(|| ApiError::battle_not_found(request.battle_id))?;
 
-                // Check if both players have submitted actions
-                let both_ready = battle_state.action_queue.iter()
-                    .all(|action| action.is_some());
+        // Engine Logic: Pure function gets valid actions
+        let valid_actions = engine::get_player_valid_actions(
+            &stored_battle.battle_state,
+            &request.player_id,
+        )?;
 
-                if both_ready {
-                    // Process the turn using the engine
-                    self.process_battle_turn(battle_state)?;
-                    Ok(true)
-                } else {
-                    Ok(true) // Action stored, waiting for other player
-                }
-            }
-            _ => Err("Battle is not waiting for player actions".to_string())
-        }
+        // Response: Convert to API format
+        Ok(GetValidActionsResponse {
+            battle_id: request.battle_id,
+            valid_actions,
+        })
     }
 
-    /// Process a complete battle turn using the engine
-    fn process_battle_turn(&self, battle_state: &mut BattleState) -> Result<(), String> {
-        // Use the engine's turn processing system
-        while ready_for_turn_resolution(battle_state) {
-            let rng = pokemon_adventure::battle::state::TurnRng::new_random();
-            let _event_bus = resolve_turn(battle_state, rng);
-            
-            // Check if battle ended
-            match battle_state.game_state {
-                GameState::Player1Win | GameState::Player2Win | GameState::Draw => {
-                    break;
-                }
-                _ => continue,
-            }
-        }
+    /// Get team information - Clean architecture implementation
+    pub async fn get_team_info(&self, request: GetTeamInfoRequest) -> Result<GetTeamInfoResponse, ApiError> {
+        // Database Load: Get current battle state
+        let stored_battle = self.db.get_battle(request.battle_id).await
+            .map_err(|e| ApiError::DatabaseError { message: e.to_string() })?
+            .ok_or_else(|| ApiError::battle_not_found(request.battle_id))?;
 
-        Ok(())
+        // Engine Logic: Validate player and get team view
+        let battle_view = engine::get_battle_state_for_player(
+            &stored_battle.battle_state,
+            &request.player_id,
+        )?;
+
+        // Response: Return detailed team information
+        Ok(GetTeamInfoResponse {
+            battle_id: request.battle_id,
+            team: convert_team_view(battle_view.player_team),
+        })
     }
+}
 
-    /// Create player summary for API response
-    fn create_player_summary(&self, battle_state: &BattleState, player_index: usize, player_id: &PlayerId) -> PlayerSummary {
-        let player = &battle_state.players[player_index];
-        
-        let active_pokemon = player.active_pokemon().map(|pokemon| PokemonSummary {
-            name: pokemon.name.clone(),
-            species: pokemon.species,
-            level: pokemon.level,
-            current_hp: pokemon.current_hp(),
-            max_hp: pokemon.max_hp(),
-            status: pokemon.status.as_ref().map(|s| format!("{:?}", s)),
-        });
+// Helper functions for converting engine types to API types
 
-        let remaining_pokemon = player.team.iter()
-            .filter_map(|p| p.as_ref())
-            .filter(|p| !p.is_fainted())
-            .count();
-
-        PlayerSummary {
-            player_id: player_id.clone(),
-            player_name: player.player_name.clone(),
-            active_pokemon,
-            team_size: player.team.len(),
-            remaining_pokemon,
-        }
+fn convert_team_view(team_view: engine::TeamView) -> ApiTeamView {
+    ApiTeamView {
+        active_pokemon: team_view.active_pokemon.map(convert_pokemon_detail),
+        team_pokemon: team_view.team_pokemon.into_iter()
+            .map(|p| p.map(convert_pokemon_summary))
+            .collect(),
     }
+}
 
-    /// Format recent battle events for API response
-    fn format_recent_events(&self, battle_state: &BattleState) -> Vec<String> {
-        // For now, return basic state information
-        // In a full implementation, you'd maintain an event log
-        vec![
-            format!("Turn {}", battle_state.turn_number),
-            format!("Game state: {:?}", battle_state.game_state),
-        ]
+fn convert_pokemon_detail(pokemon: engine::PokemonDetailView) -> ApiPokemonDetail {
+    ApiPokemonDetail {
+        name: pokemon.name,
+        species: pokemon.species,
+        level: pokemon.level,
+        current_hp: pokemon.current_hp,
+        max_hp: pokemon.max_hp,
+        attack: pokemon.stats.attack,
+        defense: pokemon.stats.defense,
+        sp_attack: pokemon.stats.sp_attack,
+        sp_defense: pokemon.stats.sp_defense,
+        speed: pokemon.stats.speed,
+        moves: pokemon.moves.into_iter()
+            .map(|m| m.map(convert_move_view))
+            .collect(),
+        status: pokemon.status.map(|s| format!("{:?}", s)),
     }
+}
+
+fn convert_pokemon_summary(pokemon: engine::PokemonSummaryView) -> ApiPokemonSummary {
+    ApiPokemonSummary {
+        name: pokemon.name,
+        species: pokemon.species,
+        level: pokemon.level,
+        current_hp: pokemon.current_hp,
+        max_hp: pokemon.max_hp,
+        is_fainted: pokemon.is_fainted,
+        status: pokemon.status.map(|s| format!("{:?}", s)),
+    }
+}
+
+fn convert_move_view(move_view: engine::MoveView) -> ApiMoveView {
+    ApiMoveView {
+        move_: move_view.move_,
+        pp: move_view.pp,
+        max_pp: move_view.max_pp,
+    }
+}
+
+fn convert_opponent_view(opponent: engine::OpponentView) -> ApiOpponentView {
+    ApiOpponentView {
+        player_name: opponent.player_name,
+        active_pokemon: opponent.active_pokemon.map(convert_pokemon_summary),
+        remaining_pokemon_count: opponent.remaining_pokemon_count,
+    }
+}
+
+fn current_timestamp() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64
 }
