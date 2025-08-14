@@ -1,0 +1,35 @@
+[package]
+name = "pokemon-adventure-api"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# Core engine dependency  
+pokemon_adventure = { path = "../pokemon-adventure", package = "pokemon-adventure" }
+
+# AWS Lambda runtime and utilities  
+lambda_runtime = "0.8"
+lambda-web = "0.2"
+tokio = { version = "1", features = ["macros"] }
+
+# API and serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# AWS SDK for DynamoDB
+aws-sdk-dynamodb = "1.0"
+aws-config = "1.0"
+
+# HTTP handling
+http = "1.0"
+
+# Error handling and logging
+anyhow = "1.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# UUID for battle IDs
+uuid = { version = "1.0", features = ["v4", "serde"] }
+
+# Date/time handling
+chrono = { version = "0.4", features = ["serde"] }
