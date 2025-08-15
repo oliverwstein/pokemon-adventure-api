@@ -38,3 +38,6 @@ uuid = { version = "1.0", features = ["v4", "serde"] }
 
 # Date/time handling
 chrono = { version = "0.4", features = ["serde"] }
+
+# For Testing
+async-trait = "0.1.77"

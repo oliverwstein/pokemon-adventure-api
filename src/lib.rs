@@ -9,3 +9,6 @@ pub mod types;
 pub use handlers::BattleHandler;
 pub use types::*;
 pub use errors::ApiError;
+
+#[cfg(test)]
+mod tests;

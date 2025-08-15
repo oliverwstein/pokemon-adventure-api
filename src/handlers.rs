@@ -1,24 +1,33 @@
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use crate::{database::Database, engine};
+use crate::errors::ApiError;
+use crate::types::*;
+
+use crate::database::Db;
 use pokemon_adventure::{
     battle::state::BattleState,
     player::PlayerAction,
 };
-use std::time::{SystemTime, UNIX_EPOCH};
-
-use crate::database::Database;
-use crate::engine;
-use crate::errors::ApiError;
-use crate::types::*;
-
+use std::sync::Arc;
 /// Clean architecture: Request → Router → Database (load) → Engine (logic) → Database (save) → Response
 pub struct BattleHandler {
-    db: Database,
+    db: Arc<dyn Db>,
 }
 
 impl BattleHandler {
-    pub async fn new(table_name: String) -> Result<Self, ApiError> {
-        let db = Database::new(table_name).await
+    // This is the constructor the tests should use.
+    pub fn new(db: Arc<dyn Db>) -> Self {
+        BattleHandler { db }
+    }
+
+    // This is the constructor our production code (router) will use to create
+    // a handler with the real DynamoDB database.
+    pub async fn new_with_real_db(table_name: String) -> Result<Self, ApiError> {
+        let db = Database::new(table_name)
+            .await
             .map_err(|e| ApiError::DatabaseError { message: e.to_string() })?;
-        Ok(BattleHandler { db })
+        Ok(BattleHandler { db: Arc::new(db) })
     }
 
     /// Create a new battle - Clean architecture implementation

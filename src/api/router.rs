@@ -15,7 +15,8 @@ impl Router {
         let table_name = std::env::var("DYNAMODB_TABLE_NAME")
             .unwrap_or_else(|_| "pokemon-battles".to_string());
         
-        let battle_handler = BattleHandler::new(table_name).await
+        // Use the new constructor for the real database
+        let battle_handler = BattleHandler::new_with_real_db(table_name).await
             .map_err(|e| format!("Failed to initialize battle handler: {}", e))?;
 
         Ok(Router { battle_handler })

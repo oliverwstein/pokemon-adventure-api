@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 /// Unique identifier for a battle
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct BattleId(pub Uuid);
 
 impl BattleId {
@@ -107,7 +107,7 @@ pub struct PokemonSummary {
 }
 
 /// Stored battle data in DynamoDB
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct StoredBattle {
     pub battle_id: BattleId,
     pub player1_id: PlayerId,
@@ -129,7 +129,7 @@ pub struct TurnLog {
 /// New API request/response types for clean architecture
 
 /// Request to get battle state
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct GetBattleStateRequest {
     pub battle_id: BattleId,
     pub player_id: PlayerId,
