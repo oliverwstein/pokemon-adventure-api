@@ -4,7 +4,7 @@
 
 This guide explains how to interact with the Pokemon Adventure API as an LLM agent. The API provides a complete Pokemon battle system with Generation 1 mechanics, accessible through standard HTTP requests.
 
-**Base URL**: `https://your-api-gateway-url/prod` (replace with your actual API Gateway URL)
+**Base URL**: `https://doox5bdogj.execute-api.us-east-1.amazonaws.com/prod` (actual deployed API Gateway URL)
 
 ## Quick Start Flow
 
@@ -41,8 +41,9 @@ GET /battles/{battle_id}/valid_actions
 # Submit your action
 POST /battles/{battle_id}/action
 {
-  "action_type": "UseMove",
-  "move_name": "Vine Whip"
+  "battle_id": "{battle_id}",
+  "player_id": "player_1", 
+  "action": {"UseMove": {"move_index": 0}}
 }
 
 # Check battle state after turn
@@ -218,26 +219,32 @@ GET /battles/{battle_id}/state
 
 **Endpoint**: `POST /battles/{battle_id}/action`
 
+**Important**: The `player_id` is always `"player_1"` for human players when using prefab teams.
+
 **Move Action**:
 ```json
 {
-  "action_type": "UseMove",
-  "move_name": "Vine Whip"
+  "battle_id": "battle_abc123",
+  "player_id": "player_1",
+  "action": {"UseMove": {"move_index": 0}}
 }
 ```
 
 **Switch Action**:
 ```json
 {
-  "action_type": "Switch",
-  "pokemon_species": "Vileplume"
+  "battle_id": "battle_abc123",
+  "player_id": "player_1",
+  "action": {"SwitchPokemon": {"team_index": 1}}
 }
 ```
 
 **Forfeit Action**:
 ```json
 {
-  "action_type": "Forfeit"
+  "battle_id": "battle_abc123", 
+  "player_id": "player_1",
+  "action": "Forfeit"
 }
 ```
 
@@ -353,7 +360,7 @@ Here's a complete example of an agent playing a battle:
 import requests
 import json
 
-BASE_URL = "https://your-api-gateway-url/prod"
+BASE_URL = "https://doox5bdogj.execute-api.us-east-1.amazonaws.com/prod"
 
 # 1. Create battle
 battle_response = requests.post(f"{BASE_URL}/battles", json={
