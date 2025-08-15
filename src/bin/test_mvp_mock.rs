@@ -29,7 +29,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "test_battle_123".to_string(),
         "Test Trainer".to_string(),
         "venusaur_team",
-        "gym_leader_easy"
+        "gym_leader_medium"
     )?;
     
     println!("✅ Created battle state:");
