@@ -117,6 +117,11 @@ impl Database {
         let battle_state_json = serde_json::to_string(&battle.battle_state)
             .map_err(|e| anyhow::anyhow!("Failed to serialize battle state: {}", e))?;
         item.insert("battle_state".to_string(), AttributeValue::S(battle_state_json));
+        
+        // Serialize the turn logs as JSON
+        let turn_logs_json = serde_json::to_string(&battle.turn_logs)
+            .map_err(|e| anyhow::anyhow!("Failed to serialize turn logs: {}", e))?;
+        item.insert("turn_logs".to_string(), AttributeValue::S(turn_logs_json));
 
         Ok(item)
     }
@@ -161,11 +166,18 @@ impl Database {
         let battle_state = serde_json::from_str(battle_state_json)
             .map_err(|e| anyhow::anyhow!("Failed to deserialize battle state: {}", e))?;
 
+        // Try to get turn_logs, default to empty if not found (backward compatibility)
+        let turn_logs = item.get("turn_logs")
+            .and_then(|v| v.as_s().ok())
+            .and_then(|json| serde_json::from_str(json).ok())
+            .unwrap_or_else(Vec::new); // Default to empty vec if missing or parsing fails
+
         Ok(StoredBattle {
             battle_id,
             player1_id,
             player2_id,
             battle_state,
+            turn_logs,
             created_at,
             last_updated,
         })

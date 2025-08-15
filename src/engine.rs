@@ -1,6 +1,6 @@
 use pokemon_adventure::{
     battle::{
-        state::{BattleState, GameState, TurnRng},
+        state::{BattleState, GameState, TurnRng, BattleEvent, EventBus},
         engine::{
             collect_player_actions, resolve_turn, ready_for_turn_resolution,
             get_valid_actions, validate_player_action,
@@ -118,11 +118,12 @@ pub fn create_battle(
 
 /// Submit a player action and process the battle forward
 /// This implements the "game tick" loop from the API plan
+/// Returns the updated battle state and events that occurred during processing
 pub fn submit_action(
     mut battle_state: BattleState,
     player_id: &PlayerId,
     action: PlayerAction,
-) -> Result<BattleState, ApiError> {
+) -> Result<(BattleState, Vec<String>), ApiError> {
     // Determine which player is acting
     let player_index = get_player_index(&battle_state, player_id)?;
 
@@ -137,9 +138,9 @@ pub fn submit_action(
     battle_state.action_queue[player_index] = Some(action);
 
     // Process battle forward as far as possible ("game tick" loop)
-    process_battle_ticks(&mut battle_state)?;
+    let turn_events = process_battle_ticks(&mut battle_state)?;
 
-    Ok(battle_state)
+    Ok((battle_state, turn_events))
 }
 
 /// Get all valid actions for a player
@@ -334,10 +335,13 @@ fn validate_action_context(
     Ok(())
 }
 
-fn process_battle_ticks(battle_state: &mut BattleState) -> Result<(), ApiError> {
+fn process_battle_ticks(battle_state: &mut BattleState) -> Result<Vec<String>, ApiError> {
     // Collect AI actions as needed
     collect_player_actions(battle_state)
         .map_err(|e| ApiError::InternalError { message: e })?;
+
+    // Collect all events from this turn processing
+    let mut all_events = Vec::new();
 
     // Process battle forward as far as possible
     let mut iterations = 0;
@@ -345,7 +349,11 @@ fn process_battle_ticks(battle_state: &mut BattleState) -> Result<(), ApiError> 
 
     while ready_for_turn_resolution(battle_state) && iterations < MAX_ITERATIONS {
         let rng = TurnRng::new_random();
-        let _event_bus = resolve_turn(battle_state, rng);
+        let event_bus = resolve_turn(battle_state, rng);
+
+        // Collect events from this turn resolution
+        let turn_events = format_battle_events(event_bus.events());
+        all_events.extend(turn_events);
 
         // Check if battle ended
         match battle_state.game_state {
@@ -364,7 +372,7 @@ fn process_battle_ticks(battle_state: &mut BattleState) -> Result<(), ApiError> 
         });
     }
 
-    Ok(())
+    Ok(all_events)
 }
 
 fn can_player_act(battle_state: &BattleState, player_index: usize) -> bool {
@@ -433,5 +441,212 @@ fn create_opponent_view(opponent: &BattlePlayer) -> OpponentView {
         player_name: opponent.player_name.clone(),
         active_pokemon,
         remaining_pokemon_count,
+    }
+}
+
+/// Format battle events as human-readable strings
+pub fn format_battle_events(events: &[BattleEvent]) -> Vec<String> {
+    events.iter().map(format_battle_event).collect()
+}
+
+/// Format a single battle event as a human-readable string
+pub fn format_battle_event(event: &BattleEvent) -> String {
+    match event {
+        BattleEvent::TurnStarted { turn_number } => {
+            format!("=== Turn {} ===", turn_number)
+        }
+        BattleEvent::TurnEnded => {
+            "Turn ended.".to_string()
+        }
+        BattleEvent::PokemonSwitched { player_index, old_pokemon, new_pokemon } => {
+            let player_name = if *player_index == 0 { "Player" } else { "Opponent" };
+            format!("{} recalled {} and sent out {}!", player_name, 
+                    format_species_name(*old_pokemon), format_species_name(*new_pokemon))
+        }
+        BattleEvent::MoveUsed { player_index: _, pokemon, move_used } => {
+            let pokemon_name = format_species_name(*pokemon);
+            format!("{} used {}!", pokemon_name, format_move_name(*move_used))
+        }
+        BattleEvent::MoveMissed { attacker, defender: _, move_used } => {
+            let attacker_name = format_species_name(*attacker);
+            let move_name = format_move_name(*move_used);
+            format!("{}'s {} missed!", attacker_name, move_name)
+        }
+        BattleEvent::MoveHit { attacker, defender, move_used } => {
+            let attacker_name = format_species_name(*attacker);
+            let defender_name = format_species_name(*defender);
+            let move_name = format_move_name(*move_used);
+            format!("{}'s {} hit {}!", attacker_name, move_name, defender_name)
+        }
+        BattleEvent::CriticalHit { attacker, defender: _, move_used: _ } => {
+            let attacker_name = format_species_name(*attacker);
+            format!("A critical hit from {}!", attacker_name)
+        }
+        BattleEvent::DamageDealt { target, damage, remaining_hp } => {
+            let target_name = format_species_name(*target);
+            format!("{} took {} damage! ({} HP remaining)", target_name, damage, remaining_hp)
+        }
+        BattleEvent::PokemonHealed { target, amount, new_hp } => {
+            let target_name = format_species_name(*target);
+            format!("{} recovered {} HP! ({} HP total)", target_name, amount, new_hp)
+        }
+        BattleEvent::PokemonFainted { player_index: _, pokemon } => {
+            let pokemon_name = format_species_name(*pokemon);
+            format!("{} fainted!", pokemon_name)
+        }
+        BattleEvent::AttackTypeEffectiveness { multiplier } => {
+            match *multiplier {
+                m if m > 1.0 => "It's super effective!".to_string(),
+                m if m < 1.0 && m > 0.0 => "It's not very effective...".to_string(),
+                0.0 => "It had no effect!".to_string(),
+                _ => "".to_string(), // Normal effectiveness, no message
+            }
+        }
+        BattleEvent::StatusApplied { target, status } => {
+            let target_name = format_species_name(*target);
+            format!("{} was affected by {}!", target_name, format_condition(status))
+        }
+        BattleEvent::StatusRemoved { target, status } => {
+            let target_name = format_species_name(*target);
+            format!("{} recovered from {}!", target_name, format_condition(status))
+        }
+        BattleEvent::StatusDamage { target, status, damage } => {
+            let target_name = format_species_name(*target);
+            let condition_name = format_condition(status);
+            format!("{} is hurt by {}! {} damage taken.", target_name, condition_name, damage)
+        }
+        BattleEvent::PokemonStatusApplied { target, status } => {
+            let target_name = format_species_name(*target);
+            let status_name = format_pokemon_status(status);
+            format!("{} is {}!", target_name, status_name)
+        }
+        BattleEvent::PokemonStatusRemoved { target, status } => {
+            let target_name = format_species_name(*target);
+            let status_name = format_pokemon_status(status);
+            format!("{} recovered from {}!", target_name, status_name)
+        }
+        BattleEvent::PokemonStatusDamage { target, status, damage, remaining_hp } => {
+            let target_name = format_species_name(*target);
+            let status_name = format_pokemon_status(status);
+            format!("{} is hurt by {}! {} damage taken. ({} HP remaining)", 
+                    target_name, status_name, damage, remaining_hp)
+        }
+        BattleEvent::ConditionExpired { target, condition } => {
+            let target_name = format_species_name(*target);
+            let condition_name = format_condition(condition);
+            format!("{}'s {} wore off.", target_name, condition_name)
+        }
+        BattleEvent::StatStageChanged { target, stat, old_stage: _, new_stage } => {
+            let target_name = format_species_name(*target);
+            let stat_name = format_stat_type(stat);
+            let change_desc = match *new_stage {
+                n if n > 0 => format!("{}'s {} rose!", target_name, stat_name),
+                n if n < 0 => format!("{}'s {} fell!", target_name, stat_name),
+                _ => format!("{}'s {} returned to normal.", target_name, stat_name),
+            };
+            change_desc
+        }
+        BattleEvent::StatChangeBlocked { target, stat: _, reason } => {
+            let target_name = format_species_name(*target);
+            format!("{}'s stats can't be changed! {}", target_name, reason)
+        }
+        BattleEvent::ActionFailed { reason } => {
+            format_action_failure_reason(reason)
+        }
+        BattleEvent::AnteIncreased { player_index: _, amount, new_total } => {
+            format!("Ante increased by {}! Total ante: {}", amount, new_total)
+        }
+        BattleEvent::PlayerDefeated { player_index } => {
+            let player_name = if *player_index == 0 { "Player" } else { "Opponent" };
+            format!("{} is out of usable Pokemon!", player_name)
+        }
+        BattleEvent::BattleEnded { winner } => {
+            match winner {
+                Some(0) => "Player wins!".to_string(),
+                Some(1) => "Opponent wins!".to_string(),
+                Some(_) => "Unknown player wins!".to_string(),
+                None => "The battle ended in a draw!".to_string(),
+            }
+        }
+    }
+}
+
+/// Format species name for display
+fn format_species_name(species: Species) -> String {
+    format!("{:?}", species)
+}
+
+/// Format move name for display  
+fn format_move_name(move_: Move) -> String {
+    format!("{:?}", move_).replace('_', " ")
+}
+
+/// Format Pokemon condition for display
+fn format_condition(condition: &pokemon_adventure::battle::conditions::PokemonCondition) -> String {
+    format!("{:?}", condition)
+}
+
+/// Format Pokemon status condition for display
+fn format_pokemon_status(status: &pokemon_adventure::pokemon::StatusCondition) -> String {
+    match status {
+        pokemon_adventure::pokemon::StatusCondition::Sleep(_) => "asleep".to_string(),
+        pokemon_adventure::pokemon::StatusCondition::Poison(_) => "poisoned".to_string(),
+        pokemon_adventure::pokemon::StatusCondition::Burn => "burned".to_string(),
+        pokemon_adventure::pokemon::StatusCondition::Paralysis => "paralyzed".to_string(),
+        pokemon_adventure::pokemon::StatusCondition::Freeze => "frozen".to_string(),
+        pokemon_adventure::pokemon::StatusCondition::Faint => "fainted".to_string(),
+    }
+}
+
+/// Format stat type for display
+fn format_stat_type(stat: &pokemon_adventure::player::StatType) -> String {
+    match stat {
+        pokemon_adventure::player::StatType::Attack => "Attack".to_string(),
+        pokemon_adventure::player::StatType::Defense => "Defense".to_string(),
+        pokemon_adventure::player::StatType::SpecialAttack => "Special Attack".to_string(),
+        pokemon_adventure::player::StatType::SpecialDefense => "Special Defense".to_string(),
+        pokemon_adventure::player::StatType::Speed => "Speed".to_string(),
+        pokemon_adventure::player::StatType::Accuracy => "Accuracy".to_string(),
+        pokemon_adventure::player::StatType::Evasion => "Evasion".to_string(),
+        pokemon_adventure::player::StatType::Focus => "Focus".to_string(),
+    }
+}
+
+/// Format action failure reason for display
+fn format_action_failure_reason(reason: &pokemon_adventure::battle::state::ActionFailureReason) -> String {
+    match reason {
+        pokemon_adventure::battle::state::ActionFailureReason::IsAsleep => {
+            "The Pokemon is fast asleep and can't move!".to_string()
+        }
+        pokemon_adventure::battle::state::ActionFailureReason::IsFrozen => {
+            "The Pokemon is frozen solid and can't move!".to_string()
+        }
+        pokemon_adventure::battle::state::ActionFailureReason::IsExhausted => {
+            "The Pokemon is exhausted and can't move!".to_string()
+        }
+        pokemon_adventure::battle::state::ActionFailureReason::IsParalyzed => {
+            "The Pokemon is paralyzed and can't move!".to_string()
+        }
+        pokemon_adventure::battle::state::ActionFailureReason::IsFlinching => {
+            "The Pokemon flinched and can't move!".to_string()
+        }
+        pokemon_adventure::battle::state::ActionFailureReason::IsConfused => {
+            "The Pokemon is confused and hurt itself!".to_string()
+        }
+        pokemon_adventure::battle::state::ActionFailureReason::IsTrapped => {
+            "The Pokemon is trapped and can't escape!".to_string()
+        }
+        pokemon_adventure::battle::state::ActionFailureReason::NoEnemyPresent => {
+            "But there was no target!".to_string()
+        }
+        pokemon_adventure::battle::state::ActionFailureReason::PokemonFainted => {
+            "But the Pokemon has fainted!".to_string()
+        }
+        pokemon_adventure::battle::state::ActionFailureReason::MoveFailedToExecute => {
+            "But the move failed to execute!".to_string()
+        }
+        pokemon_adventure::battle::state::ActionFailureReason::NoPPRemaining => {
+            "But there's no PP left for that move!".to_string()
+        }
     }
 }

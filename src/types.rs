@@ -113,8 +113,17 @@ pub struct StoredBattle {
     pub player1_id: PlayerId,
     pub player2_id: PlayerId,
     pub battle_state: BattleState,
+    pub turn_logs: Vec<TurnLog>, // Events per turn for battle log
     pub created_at: i64, // Unix timestamp
     pub last_updated: i64, // Unix timestamp
+}
+
+/// Turn log entry storing events for a specific turn
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct TurnLog {
+    pub turn_number: u32,
+    pub events: Vec<String>, // Human-readable event messages
+    pub timestamp: i64, // When this turn was processed
 }
 
 /// New API request/response types for clean architecture
@@ -264,4 +273,20 @@ pub struct CreateMvpBattleResponse {
     pub battle_id: BattleId,
     pub status: String,
     pub battle_state: GetBattleStateResponse, // Include initial state
+}
+
+/// Request to get battle events/log
+#[derive(Debug, Serialize, Deserialize)]
+pub struct GetBattleEventsRequest {
+    pub battle_id: BattleId,
+    pub player_id: PlayerId,
+    pub last_turns: Option<u32>, // If specified, get only the last X turns; if None, get all
+}
+
+/// Response containing battle events
+#[derive(Debug, Serialize, Deserialize)]
+pub struct GetBattleEventsResponse {
+    pub battle_id: BattleId,
+    pub turn_logs: Vec<TurnLog>,
+    pub total_turns: u32,
 }

@@ -40,6 +40,7 @@ impl BattleHandler {
             player1_id: request.player1_id,
             player2_id: request.player2_id,
             battle_state,
+            turn_logs: Vec::new(), // Start with empty turn logs
             created_at: current_timestamp(),
             last_updated: current_timestamp(),
         };
@@ -62,15 +63,25 @@ impl BattleHandler {
             .ok_or_else(|| ApiError::battle_not_found(request.battle_id))?;
 
         // Engine Logic: Pure function processes the action
-        let new_battle_state = engine::submit_action(
+        let (new_battle_state, turn_events) = engine::submit_action(
             stored_battle.battle_state,
             &request.player_id,
             request.action,
         )?;
 
-        // Database Save: Update battle state
-        stored_battle.battle_state = new_battle_state;
+        // Database Save: Update battle state and turn logs
+        stored_battle.battle_state = new_battle_state.clone();
         stored_battle.last_updated = current_timestamp();
+        
+        // Add turn log if there were events
+        if !turn_events.is_empty() {
+            let turn_log = TurnLog {
+                turn_number: new_battle_state.turn_number,
+                events: turn_events,
+                timestamp: current_timestamp(),
+            };
+            stored_battle.turn_logs.push(turn_log);
+        }
         
         self.db.update_battle(&stored_battle).await
             .map_err(|e| ApiError::DatabaseError { message: e.to_string() })?;
@@ -183,6 +194,7 @@ impl BattleHandler {
             player1_id: PlayerId("player_1".to_string()),
             player2_id: PlayerId("npc".to_string()),
             battle_state: battle_state.clone(),
+            turn_logs: Vec::new(), // Start with empty turn logs
             created_at: current_timestamp(),
             last_updated: current_timestamp(),
         };
@@ -209,6 +221,42 @@ impl BattleHandler {
             battle_id,
             status: "Battle created successfully".to_string(),
             battle_state: initial_state,
+        })
+    }
+
+    /// Get battle events/log - Clean architecture implementation
+    pub async fn get_battle_events(&self, request: GetBattleEventsRequest) -> Result<GetBattleEventsResponse, ApiError> {
+        // Database Load: Get battle
+        let stored_battle = self.db.get_battle(request.battle_id).await
+            .map_err(|e| ApiError::DatabaseError { message: e.to_string() })?
+            .ok_or_else(|| ApiError::battle_not_found(request.battle_id))?;
+
+        // Validate player authorization
+        let _player_index = engine::validate_player_authorization(
+            &stored_battle.battle_state,
+            &request.player_id,
+        )?;
+
+        // Filter turn logs based on request
+        let turn_logs = if let Some(last_turns) = request.last_turns {
+            // Get only the last X turns
+            let total_turns = stored_battle.turn_logs.len();
+            let start_index = if total_turns > last_turns as usize {
+                total_turns - last_turns as usize
+            } else {
+                0
+            };
+            stored_battle.turn_logs[start_index..].to_vec()
+        } else {
+            // Get all turn logs
+            stored_battle.turn_logs.clone()
+        };
+
+        // Response: Return filtered turn logs
+        Ok(GetBattleEventsResponse {
+            battle_id: request.battle_id,
+            turn_logs,
+            total_turns: stored_battle.battle_state.turn_number,
         })
     }
 }

@@ -95,7 +95,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let action = PlayerAction::UseMove { move_index: 0 };
     println!("   Submitting action: {:?}", action);
     
-    let updated_state = engine::submit_action(
+    let (updated_state, turn_events) = engine::submit_action(
         current_state,
         &player_id,
         action
@@ -104,6 +104,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("✅ Action processed successfully:");
     println!("   Game State: {:?}", updated_state.game_state);
     println!("   Turn: {}", updated_state.turn_number);
+    
+    // Show turn events
+    if !turn_events.is_empty() {
+        println!("   Turn Events:");
+        for event in &turn_events {
+            println!("     - {}", event);
+        }
+    }
     
     // Show HP changes
     if let Some(player_pokemon) = updated_state.players[0].active_pokemon() {
@@ -156,11 +164,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         if let Some(first_action) = valid_actions.first() {
             println!("   Turn {}: Using action {:?}", turn_count + 1, first_action);
             
-            current_state = engine::submit_action(
+            let (new_state, _events) = engine::submit_action(
                 current_state,
                 &player_id,
                 first_action.clone()
             )?;
+            current_state = new_state;
             
             // Show turn results
             if let (Some(p_pok), Some(n_pok)) = (

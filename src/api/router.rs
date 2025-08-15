@@ -58,6 +58,9 @@ impl Router {
             ("GET", path) if path.starts_with("/battles/") && path.contains("/team_info") => {
                 self.get_team_info(payload).await
             }
+            ("GET", path) if path.starts_with("/battles/") && path.contains("/events") => {
+                self.get_battle_events(payload).await
+            }
             ("GET", "/health") => Ok(json!({
                 "status": "healthy",
                 "timestamp": chrono::Utc::now().to_rfc3339()
@@ -163,6 +166,23 @@ impl Router {
         
         let request = GetTeamInfoRequest { battle_id, player_id };
         let response = self.battle_handler.get_team_info(request).await?;
+        Ok(serde_json::to_value(response)?)
+    }
+
+    async fn get_battle_events(&self, payload: Value) -> Result<Value, anyhow::Error> {
+        let (battle_id, player_id) = self.extract_battle_and_player_from_path(payload.clone())?;
+        
+        // Extract last_turns query parameter
+        let query_params = payload.get("queryStringParameters")
+            .and_then(|v| v.as_object());
+        
+        let last_turns = query_params
+            .and_then(|params| params.get("last_turns"))
+            .and_then(|v| v.as_str())
+            .and_then(|s| s.parse::<u32>().ok());
+        
+        let request = GetBattleEventsRequest { battle_id, player_id, last_turns };
+        let response = self.battle_handler.get_battle_events(request).await?;
         Ok(serde_json::to_value(response)?)
     }
 
