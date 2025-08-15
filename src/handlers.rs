@@ -146,6 +146,71 @@ impl BattleHandler {
             team: convert_team_view(battle_view.player_team),
         })
     }
+
+    /// MVP Endpoints - Get available teams
+    pub async fn get_available_teams(&self) -> Result<AvailableTeamsResponse, ApiError> {
+        // Engine Logic: Pure function gets prefab teams
+        let teams = engine::get_available_teams();
+        
+        // Response: Return available teams
+        Ok(AvailableTeamsResponse { teams })
+    }
+
+    /// MVP Endpoints - Get NPC opponents
+    pub async fn get_npc_opponents(&self) -> Result<NpcOpponentsResponse, ApiError> {
+        // Engine Logic: Pure function gets NPC opponents
+        let opponents = engine::get_npc_opponents();
+        
+        // Response: Return NPC opponents
+        Ok(NpcOpponentsResponse { opponents })
+    }
+
+    /// MVP Endpoints - Create battle with prefab team vs NPC
+    pub async fn create_mvp_battle(&self, request: CreateMvpBattleRequest) -> Result<CreateMvpBattleResponse, ApiError> {
+        let battle_id = BattleId::new();
+        
+        // Engine Logic: Create battle between player and NPC
+        let battle_state = engine::create_mvp_battle(
+            battle_id.to_string(),
+            request.player_name.clone(),
+            &request.team_id,
+            &request.opponent_id,
+        )?;
+
+        // Database Save: Store the new battle
+        let stored_battle = StoredBattle {
+            battle_id,
+            player1_id: PlayerId("player_1".to_string()),
+            player2_id: PlayerId("npc".to_string()),
+            battle_state: battle_state.clone(),
+            created_at: current_timestamp(),
+            last_updated: current_timestamp(),
+        };
+
+        self.db.create_battle(&stored_battle).await
+            .map_err(|e| ApiError::DatabaseError { message: e.to_string() })?;
+
+        // Response: Return battle info with initial state
+        let battle_view = engine::get_battle_state_for_player(
+            &battle_state,
+            &PlayerId("player_1".to_string()),
+        )?;
+
+        let initial_state = GetBattleStateResponse {
+            battle_id,
+            game_state: battle_view.game_state,
+            turn_number: battle_view.turn_number,
+            can_act: battle_view.can_act,
+            player_team: convert_team_view(battle_view.player_team),
+            opponent_info: convert_opponent_view(battle_view.opponent_public_info),
+        };
+
+        Ok(CreateMvpBattleResponse {
+            battle_id,
+            status: "Battle created successfully".to_string(),
+            battle_state: initial_state,
+        })
+    }
 }
 
 // Helper functions for converting engine types to API types

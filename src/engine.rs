@@ -12,9 +12,79 @@ use pokemon_adventure::{
     moves::Move,
 };
 use crate::errors::ApiError;
-use crate::types::{TeamPokemon, PlayerId};
+use crate::types::{TeamPokemon, PlayerId, PrefabTeamInfo, NpcOpponentInfo};
 
 /// Pure engine functions - no I/O dependencies, just game logic
+
+/// Get available prefab teams for the API
+pub fn get_available_teams() -> Vec<PrefabTeamInfo> {
+    pokemon_adventure::prefab_teams::get_prefab_teams()
+        .into_iter()
+        .map(|team| PrefabTeamInfo {
+            id: team.id,
+            name: team.name,
+            description: team.description,
+            pokemon_count: team.pokemon.len(),
+            average_level: team.pokemon.iter()
+                .map(|p| p.level as u32)
+                .sum::<u32>() as u8 / team.pokemon.len() as u8,
+        })
+        .collect()
+}
+
+/// Get available NPC opponents
+pub fn get_npc_opponents() -> Vec<NpcOpponentInfo> {
+    vec![
+        NpcOpponentInfo {
+            id: "gym_leader_easy".to_string(),
+            name: "Gym Leader Brock".to_string(),
+            description: "Rock-type specialist with defensive strategies".to_string(),
+            difficulty: "easy".to_string(),
+        },
+        NpcOpponentInfo {
+            id: "gym_leader_medium".to_string(),
+            name: "Gym Leader Misty".to_string(),
+            description: "Water-type master with balanced offense and control".to_string(),
+            difficulty: "medium".to_string(),
+        },
+        NpcOpponentInfo {
+            id: "gym_leader_hard".to_string(),
+            name: "Gym Leader Lt. Surge".to_string(),
+            description: "Electric-type powerhouse with aggressive tactics".to_string(),
+            difficulty: "hard".to_string(),
+        },
+    ]
+}
+
+/// Create a battle between player (using prefab team) and NPC
+pub fn create_mvp_battle(
+    battle_id: String,
+    player_name: String,
+    team_id: &str,
+    opponent_id: &str,
+) -> Result<BattleState, ApiError> {
+    // Create player from prefab team
+    let player = pokemon_adventure::prefab_teams::create_battle_player_from_prefab(
+        team_id,
+        "player_1".to_string(),
+        player_name,
+    ).map_err(|e| ApiError::validation_error(e))?;
+
+    // Create NPC opponent based on difficulty
+    let npc_difficulty = match opponent_id {
+        "gym_leader_easy" => "easy",
+        "gym_leader_medium" => "medium", 
+        "gym_leader_hard" => "hard",
+        _ => return Err(ApiError::validation_error(format!("Unknown opponent: {}", opponent_id))),
+    };
+
+    let npc = pokemon_adventure::prefab_teams::create_random_npc_team(npc_difficulty)
+        .map_err(|e| ApiError::validation_error(e))?;
+
+    // Create battle state
+    let battle_state = BattleState::new(battle_id, player, npc);
+    Ok(battle_state)
+}
 
 /// Create a new battle state from team configurations
 pub fn create_battle(

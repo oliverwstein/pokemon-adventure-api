@@ -1,0 +1,9 @@
+target/
+Dockerfile
+.dockerignore
+.git/
+*.zip
+bootstrap
+.vscode/
+.idea/
+*.md

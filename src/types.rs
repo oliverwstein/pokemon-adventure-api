@@ -216,3 +216,52 @@ pub struct ApiOpponentView {
     pub active_pokemon: Option<ApiPokemonSummary>,
     pub remaining_pokemon_count: usize,
 }
+
+/// API types for MVP endpoints
+
+/// Response for available teams endpoint
+#[derive(Debug, Serialize, Deserialize)]
+pub struct AvailableTeamsResponse {
+    pub teams: Vec<PrefabTeamInfo>,
+}
+
+/// Prefab team information for API
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PrefabTeamInfo {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub pokemon_count: usize,
+    pub average_level: u8,
+}
+
+/// Response for NPC opponents endpoint
+#[derive(Debug, Serialize, Deserialize)]
+pub struct NpcOpponentsResponse {
+    pub opponents: Vec<NpcOpponentInfo>,
+}
+
+/// NPC opponent information for API
+#[derive(Debug, Serialize, Deserialize)]
+pub struct NpcOpponentInfo {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub difficulty: String,
+}
+
+/// MVP Create battle request (simplified)
+#[derive(Debug, Serialize, Deserialize)]
+pub struct CreateMvpBattleRequest {
+    pub player_name: String,
+    pub team_id: String,
+    pub opponent_id: String,
+}
+
+/// MVP Create battle response
+#[derive(Debug, Serialize, Deserialize)]
+pub struct CreateMvpBattleResponse {
+    pub battle_id: BattleId,
+    pub status: String,
+    pub battle_state: GetBattleStateResponse, // Include initial state
+}

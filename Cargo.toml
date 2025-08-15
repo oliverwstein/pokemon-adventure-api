@@ -3,6 +3,10 @@ name = "pokemon-adventure-api"
 version = "0.1.0"
 edition = "2021"
 
+[lib]
+name = "pokemon_adventure_api"
+path = "src/lib.rs"
+
 [dependencies]
 # Core engine dependency  
 pokemon_adventure = { path = "../pokemon-adventure", package = "pokemon-adventure" }

@@ -24,25 +24,39 @@ impl Router {
     pub async fn call(&self, event: lambda_runtime::LambdaEvent<Value>) -> Result<Value, Error> {
         let (payload, _context) = event.into_parts();
         
-        // Extract HTTP method and path from the Lambda event
-        let method = payload.get("httpMethod")
+        // Extract HTTP method and path from the Lambda event (API Gateway v2 format)
+        let method = payload.get("requestContext")
+            .and_then(|ctx| ctx.get("http"))
+            .and_then(|http| http.get("method"))
             .and_then(|v| v.as_str())
             .unwrap_or("GET");
             
-        let path = payload.get("path")
+        // Extract path from rawPath and remove /prod prefix
+        let raw_path = payload.get("rawPath")
             .and_then(|v| v.as_str())
             .unwrap_or("/");
+            
+        let path = raw_path.strip_prefix("/prod").unwrap_or(raw_path);
 
         info!("Processing {} {}", method, path);
 
         // Route the request
         let response = match (method, path) {
-            ("POST", "/battles") => self.create_battle(payload).await,
-            ("POST", path) if path.starts_with("/battles/") && path.ends_with("/actions") => {
+            // MVP Endpoints
+            ("GET", "/available_teams") => self.get_available_teams().await,
+            ("GET", "/npc_opponents") => self.get_npc_opponents().await, 
+            ("POST", "/battles") => self.create_mvp_battle(payload).await,
+            ("POST", path) if path.starts_with("/battles/") && path.ends_with("/action") => {
                 self.submit_action(payload).await
             }
-            ("GET", path) if path.starts_with("/battles/") => {
-                self.get_battle(payload).await
+            ("GET", path) if path.starts_with("/battles/") && path.contains("/state") => {
+                self.get_battle_state(payload).await
+            }
+            ("GET", path) if path.starts_with("/battles/") && path.contains("/valid_actions") => {
+                self.get_valid_actions(payload).await
+            }
+            ("GET", path) if path.starts_with("/battles/") && path.contains("/team_info") => {
+                self.get_team_info(payload).await
             }
             ("GET", "/health") => Ok(json!({
                 "status": "healthy",
@@ -76,27 +90,39 @@ impl Router {
         }
     }
 
-    async fn create_battle(&self, payload: Value) -> Result<Value, anyhow::Error> {
+    // MVP Endpoint implementations
+    async fn get_available_teams(&self) -> Result<Value, anyhow::Error> {
+        let response = self.battle_handler.get_available_teams().await?;
+        Ok(serde_json::to_value(response)?)
+    }
+
+    async fn get_npc_opponents(&self) -> Result<Value, anyhow::Error> {
+        let response = self.battle_handler.get_npc_opponents().await?;
+        Ok(serde_json::to_value(response)?)
+    }
+
+    async fn create_mvp_battle(&self, payload: Value) -> Result<Value, anyhow::Error> {
         let body = payload.get("body")
             .and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("Missing request body"))?;
 
-        let request: CreateBattleRequest = serde_json::from_str(body)
+        let request: CreateMvpBattleRequest = serde_json::from_str(body)
             .map_err(|e| anyhow::anyhow!("Invalid request format: {}", e))?;
 
-        let response = self.battle_handler.create_battle(request).await?;
+        let response = self.battle_handler.create_mvp_battle(request).await?;
         Ok(serde_json::to_value(response)?)
     }
 
     async fn submit_action(&self, payload: Value) -> Result<Value, anyhow::Error> {
         // Extract battle_id from path
-        let path = payload.get("path")
+        let raw_path = payload.get("rawPath")
             .and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("Missing path"))?;
+        let path = raw_path.strip_prefix("/prod").unwrap_or(raw_path);
         
         let battle_id_str = path
             .strip_prefix("/battles/")
-            .and_then(|s| s.strip_suffix("/actions"))
+            .and_then(|s| s.strip_suffix("/action"))
             .ok_or_else(|| anyhow::anyhow!("Invalid path format"))?;
 
         let battle_id = BattleId(battle_id_str.parse()
@@ -116,35 +142,57 @@ impl Router {
         Ok(serde_json::to_value(response)?)
     }
 
-    async fn get_battle(&self, payload: Value) -> Result<Value, anyhow::Error> {
+    async fn get_battle_state(&self, payload: Value) -> Result<Value, anyhow::Error> {
+        let (battle_id, player_id) = self.extract_battle_and_player_from_path(payload)?;
+        
+        let request = GetBattleStateRequest { battle_id, player_id };
+        let response = self.battle_handler.get_battle_state(request).await?;
+        Ok(serde_json::to_value(response)?)
+    }
+
+    async fn get_valid_actions(&self, payload: Value) -> Result<Value, anyhow::Error> {
+        let (battle_id, player_id) = self.extract_battle_and_player_from_path(payload)?;
+        
+        let request = GetValidActionsRequest { battle_id, player_id };
+        let response = self.battle_handler.get_valid_actions(request).await?;
+        Ok(serde_json::to_value(response)?)
+    }
+
+    async fn get_team_info(&self, payload: Value) -> Result<Value, anyhow::Error> {
+        let (battle_id, player_id) = self.extract_battle_and_player_from_path(payload)?;
+        
+        let request = GetTeamInfoRequest { battle_id, player_id };
+        let response = self.battle_handler.get_team_info(request).await?;
+        Ok(serde_json::to_value(response)?)
+    }
+
+    // Helper method to extract battle_id and player_id from path and query params
+    fn extract_battle_and_player_from_path(&self, payload: Value) -> Result<(BattleId, PlayerId), anyhow::Error> {
         // Extract battle_id from path
-        let path = payload.get("path")
+        let raw_path = payload.get("rawPath")
             .and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("Missing path"))?;
+        let path = raw_path.strip_prefix("/prod").unwrap_or(raw_path);
         
         let battle_id_str = path
             .strip_prefix("/battles/")
+            .and_then(|s| s.split('/').next())
             .ok_or_else(|| anyhow::anyhow!("Invalid path format"))?;
 
         let battle_id = BattleId(battle_id_str.parse()
             .map_err(|e| anyhow::anyhow!("Invalid battle_id: {}", e))?);
 
-        // Extract player_id from query parameters if present
+        // Extract player_id from query parameters
         let query_params = payload.get("queryStringParameters")
             .and_then(|v| v.as_object());
 
         let player_id = query_params
             .and_then(|params| params.get("player_id"))
             .and_then(|v| v.as_str())
-            .map(|s| PlayerId(s.to_string()));
+            .map(|s| PlayerId(s.to_string()))
+            .unwrap_or(PlayerId("player_1".to_string())); // Default to player_1 for MVP
 
-        // For now, use get_battle_state as the basic implementation
-        let battle_state_request = GetBattleStateRequest {
-            battle_id,
-            player_id: player_id.unwrap_or(PlayerId("system".to_string())),
-        };
-        let response = self.battle_handler.get_battle_state(battle_state_request).await?;
-        Ok(serde_json::to_value(response)?)
+        Ok((battle_id, player_id))
     }
 
     fn not_found(&self) -> Value {
