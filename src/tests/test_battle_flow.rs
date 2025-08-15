@@ -12,7 +12,7 @@ async fn test_solar_beam_two_turn_flow() {
     let create_request = CreateMvpBattleRequest {
         player_name: "Test Trainer".to_string(),
         team_id: "venusaur_team".to_string(),
-        opponent_id: "gym_leader_easy".to_string(),
+        opponent_id: "gym_leader_medium".to_string(),
     };
     let create_response = handler.create_mvp_battle(create_request).await.unwrap();
     let battle_id = create_response.battle_id;
@@ -46,7 +46,7 @@ async fn test_solar_beam_two_turn_flow() {
         "Venusaur should have the Charging condition"
     );
     assert!(
-        !turn_1_events.iter().any(|e| e.contains("took") && e.contains("damage")),
+        !turn_1_events.iter().any(|e| e.contains("Blastoise took") && e.contains("damage")),
         "Solar Beam should not deal damage on the first turn"
     );
     
