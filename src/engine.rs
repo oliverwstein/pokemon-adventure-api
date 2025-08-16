@@ -2,7 +2,7 @@ use pokemon_adventure::{
     battle::{
         state::{BattleState, GameState, TurnRng, BattleEvent, EventBus},
         engine::{
-            collect_player_actions, resolve_turn, ready_for_turn_resolution,
+            collect_npc_actions, resolve_turn, ready_for_turn_resolution,
             get_valid_actions, validate_player_action,
         },
     },
@@ -337,9 +337,13 @@ fn validate_action_context(
 
 fn process_battle_ticks(battle_state: &mut BattleState) -> Result<Vec<String>, ApiError> {
     // Collect AI actions as needed
-    collect_player_actions(battle_state)
-        .map_err(|e| ApiError::InternalError { message: e })?;
+    let npc_actions = collect_npc_actions(battle_state);
 
+    // Step 2: Explicitly apply the decided NPC actions to the battle's action queue.
+    // This is the only place where we mutate the state based on the AI's decisions.
+    for (player_index, action) in npc_actions {
+        battle_state.action_queue[player_index] = Some(action);
+    }
     let mut all_formatted_events = Vec::new();
     let mut iterations = 0;
     const MAX_ITERATIONS: u32 = 100; // Prevent infinite loops
